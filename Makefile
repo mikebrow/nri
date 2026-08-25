@@ -149,7 +149,7 @@ $(BIN_PATH)/wasm build/bin/wasm: FORCE
 # test targets
 #
 
-test-gopkgs: go-generate test-main test-ulimits test-rdt test-hook-injector test-writable-cgroups
+test-gopkgs: go-generate test-main test-ulimits test-rdt test-hook-injector test-writable-cgroups test-identity-injector
 
 test-main:
 	$(Q)mkdir -p $(COVERAGE_PATH)
@@ -177,6 +177,9 @@ test-hook-injector:
 
 test-writable-cgroups:
 	$(Q)cd ./plugins/writable-cgroups && $(GO_TEST) -v
+
+test-identity-injector:
+	$(Q)cd ./plugins/identity-injector && $(GO_TEST) -v
 
 codecov: SHELL := $(shell which bash)
 codecov:
