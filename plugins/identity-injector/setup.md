@@ -1,8 +1,134 @@
-This document describes how to get a test setup up and running to test the NRI Identity Plugin
+This document describes how to get a test setup up and running to test the NRI Identity Plugin.
+
+Two cluster environments are documented:
+
+- **Option A — local-cluster-up.sh**: uses Containerd and Kubernetes both built and run from source, started via `local-cluster-up.sh`.
+- **Option B — kind** (recommended for quick local testing): uses [kind](https://kind.sigs.k8s.io/) to spin up a single-node Kubernetes cluster inside Docker. No source build required.
+
+The SPIRE configuration steps (1.2 onwards), the plugin build and deploy steps, and the verification steps are identical for both options. The only difference is in how the cluster and local registry are created (Option A or B prerequisites below).
+
+---
+
+# Option A: local-cluster-up.sh Setup (Prerequisites)
 
 Note 1: that this setup uses Containerd and Kubernetes both built and run from source.
 
 Note 2: This test setup is executed using `local-cluster-up.sh`.
+
+---
+
+# Option B: kind-based Setup (Prerequisites)
+
+## Step 0.1: Install kind, kubectl, and start a local registry
+
+Install `kind` and `kubectl` if not already present:
+
+```
+# kind
+curl -sSLo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+chmod +x /usr/local/bin/kind
+
+# kubectl
+curl -sSLo /usr/local/bin/kubectl \
+  "https://dl.k8s.io/release/$(curl -sSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x /usr/local/bin/kubectl
+```
+
+> For ARM64 hosts replace `amd64` with `arm64` in both URLs.
+
+Start a local Docker registry that the kind node will use to pull the plugin image:
+
+```
+docker run -d --restart=always -p 5000:5000 --name kind-registry registry:2
+```
+
+## Step 0.2: Create the kind cluster with NRI enabled
+
+kind nodes run containerd. The config patch below enables the NRI runtime hook and configures the node to resolve `localhost:5000` image pulls via the local registry container.
+
+```
+cat > /tmp/kind-nri-config.yaml << 'EOF'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+- |-
+  [plugins."io.containerd.nri.v1".nri]
+    disable = false
+    socket_path = "/var/run/nri/nri.sock"
+    plugin_path = "/opt/nri/plugins"
+    plugin_config_path = "/etc/nri/conf.d"
+  [plugins."io.containerd.grpc.v1.cri".registry]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
+      [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
+        endpoint = ["http://kind-registry:5000"]
+EOF
+
+kind create cluster --name nri-test --config /tmp/kind-nri-config.yaml
+```
+
+Expected output:
+
+```
+Creating cluster "nri-test" ...
+ • Ensuring node image (kindest/node:v1.32.2) 🖼  ...
+ ✓ Ensuring node image (kindest/node:v1.32.2) 🖼
+ • Preparing nodes 📦   ...
+ ✓ Preparing nodes 📦
+ • Writing configuration 📜  ...
+ ✓ Writing configuration 📜
+ • Starting control-plane 🕹️  ...
+ ✓ Starting control-plane 🕹️
+ • Installing CNI 🔌  ...
+ ✓ Installing CNI 🔌
+ • Installing StorageClass 💾  ...
+ ✓ Installing StorageClass 💾
+Set kubectl context to "kind-nri-test"
+You can now use your cluster with:
+
+kubectl cluster-info --context kind-nri-test
+
+Thanks for using kind! 😊
+```
+
+Connect the registry container to the kind Docker network so the node can reach it by hostname:
+
+```
+docker network connect kind kind-registry
+```
+
+Verify NRI is enabled in the node's containerd config:
+
+```
+docker exec nri-test-control-plane grep -A6 '"io.containerd.nri.v1"' /etc/containerd/config.toml
+```
+
+Expected output:
+
+```
+[plugins."io.containerd.nri.v1"]
+    [plugins."io.containerd.nri.v1".nri]
+      disable = false
+      plugin_config_path = "/etc/nri/conf.d"
+      plugin_path = "/opt/nri/plugins"
+      socket_path = "/var/run/nri/nri.sock"
+```
+
+Create the host directory that will hold SVID files (the plugin mounts this into containers):
+
+```
+docker exec nri-test-control-plane mkdir -p /var/run/spiffe/secrets
+docker exec nri-test-control-plane chmod 777 /var/run/spiffe/secrets
+```
+
+For the remainder of the document, set a shell alias so the commands match the Option A style:
+
+```
+alias kubectl="kubectl --context kind-nri-test"
+```
+
+All subsequent `kubectl` commands in Steps 1–4 apply unchanged. When the original instructions reference `sudo ./_output/bin/kubectl --kubeconfig=/var/run/kubernetes/admin.kubeconfig`, use plain `kubectl` instead (the kind context is already set).
+
+---
 
 # Step 1: Spiffe/Spire
 
